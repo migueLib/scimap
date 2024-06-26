@@ -141,7 +141,6 @@ Example:
                 ind = tree.query(data[['x','y']], k=knn, return_distance= False)
             neighbours = pd.DataFrame(ind.tolist(), index = data.index) # neighbour DF
             neighbours.drop(0, axis=1, inplace=True) # Remove self neighbour
-            print(ind)
             
         # b) Local radius method
         if method == 'radius':
@@ -156,35 +155,8 @@ Example:
                 
             for i in range(0, len(ind)): ind[i] = np.delete(ind[i], np.argwhere(ind[i] == i))#remove self
             neighbours = pd.DataFrame(ind.tolist(), index = data.index) # neighborhood DF
-            print(ind)
 
         # c) Delaunay triangulation method
-        # if method == 'delaunay':
-        #     if verbose:
-        #         print("Performing Delaunay triangulation to identify neighbours for every cell")
-        #     if z_coordinate is not None:
-        #         points = data[['x', 'y', 'z']].values
-        #     else:
-        #         points = data[['x', 'y']].values
-        #
-        #     # Perform Delaunay triangulation
-        #     delaunay = Delaunay(points)
-        #
-        #     # Initialize a dictionary to store neighbours
-        #     neighbours_dict = {i: set() for i in range(len(points))}
-        #
-        #     # Iterate over each simplex (triangle/tetrahedron) to populate the neighbours dictionary
-        #     for simplex in delaunay.simplices:
-        #         for i in range(len(simplex)):
-        #             for j in range(i + 1, len(simplex)):
-        #                 neighbours_dict[simplex[i]].add(simplex[j])
-        #                 neighbours_dict[simplex[j]].add(simplex[i])
-        #
-        #     # Convert the neighbours dictionary to a DataFrame
-        #     neighbours_list = [list(neighbours) for neighbours in neighbours_dict.values()]
-        #     neighbours = pd.DataFrame(neighbours_list, index=data.index)
-        #     print(ind)
-
         if method == 'delaunay':
             if verbose:
                 print("Performing Delaunay triangulation to identify neighbours for every cell")
@@ -221,8 +193,6 @@ Example:
 
             # Replace -1 with None
             neighbours.replace(-1, None, inplace=True)
-            print(ind)
-            print(neighbours)
 
         # Map Phenotypes to Neighbours
         # Loop through (all functionized methods were very slow)
@@ -245,16 +215,36 @@ Example:
         # Permutation
         if verbose:
             print('Performing '+ str(permutation) + ' permutations')
-    
+
+        normalization = "conditional" # normalization method
         def permutation_pval (data):
             data = data.assign(neighbour_phenotype=np.random.permutation(data['neighbour_phenotype']))
             #data['neighbour_phenotype'] = np.random.permutation(data['neighbour_phenotype'])
             data_freq = data.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack()
-            data_freq = data_freq.fillna(0).stack().values 
+            data_freq = data_freq.fillna(0).stack().values
             return data_freq
-        
+
+        def permutation_pval_norm (data):
+            data = data.assign(neighbour_phenotype=np.random.permutation(data['neighbour_phenotype']))
+            data_freq = data.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack()
+
+            # Remove duplicate interactions (conditional factor)
+            data = data.reset_index()
+            data = data.drop_duplicates()
+            data = data.set_index('index')
+
+            normalization_factor = data.groupby(['phenotype', 'neighbour_phenotype']).size().unstack()
+            data_freq = data_freq/normalization_factor
+            data_freq = data_freq.fillna(0).stack().values
+
+            return data_freq
+
         # Apply function
-        final_scores = Parallel(n_jobs=-1)(delayed(permutation_pval)(data=n) for i in range(permutation)) 
+        if normalization == "total":
+            final_scores = Parallel(n_jobs=-1)(delayed(permutation_pval)(data=n) for i in range(permutation))
+        if normalization == "conditional":
+            final_scores = Parallel(n_jobs=-1)(delayed(permutation_pval_norm)(data=n) for i in range(permutation))
+
         perm = pd.DataFrame(final_scores).T
         
         # Consolidate the permutation results
@@ -262,10 +252,27 @@ Example:
             print('Consolidating the permutation results')
         # Calculate P value
         # real
-        n_freq = n.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack().fillna(0).stack() 
+        n_freq = n.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack().fillna(0).stack()
+
+        # Normalize n_freq if normalization is conditional
+
+        if normalization == "conditional":
+            data = n.assign(neighbour_phenotype=np.random.permutation(n['neighbour_phenotype']))
+            data_freq = n.groupby(['phenotype', 'neighbour_phenotype'], observed=False).size().unstack()
+
+            # Remove duplicate interactions (conditional factor)
+            data = data.reset_index()
+            data = data.drop_duplicates()
+            data = data.set_index('index')
+
+            normalization_factor = data.groupby(['phenotype', 'neighbour_phenotype']).size().unstack()
+            data_freq = data_freq / normalization_factor
+            n_freq = data_freq.fillna(0).stack()
+
         # permutation
         mean = perm.mean(axis=1)
         std = perm.std(axis=1)
+
         # P-value calculation
         if pval_method == 'abs':
             # real value - prem value / no of perm 
@@ -276,22 +283,33 @@ Example:
             z_scores[np.isnan(z_scores)] = 0
             p_values = scipy.stats.norm.sf(abs(z_scores))*2
             p_values = p_values[~np.isnan(p_values)]
-            
+            print(z_scores.values)
+
         # Compute Direction of interaction (interaction or avoidance)
         direction = ((n_freq.values - mean) / abs(n_freq.values - mean)).fillna(1)
 
-        # Normalize based on total cell count
-        k = n.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack().fillna(0)
-        # add neighbour phenotype that are not present to make k a square matrix
-        columns_to_add = dict.fromkeys(np.setdiff1d(k.index,k.columns), 0)
-        k = k.assign(**columns_to_add)
+        # Calculate number of cells of each type with at least one neighbor of another type
+        if normalization == "conditional":
+            neighbor_counts = n.groupby(['phenotype', 'neighbour_phenotype']).size().unstack().fillna(0)
+            cells_with_neighbors = (neighbor_counts > 0).sum(axis=1)
+            # Normalize based on these counts
+            k = n.groupby(['phenotype', 'neighbour_phenotype'], observed=False).size().unstack().fillna(0)
+            k = k.div(cells_with_neighbors, axis=0)
+            k_max = k.div(k.max(axis=1), axis=0).stack()
 
-        total_cell_count = data['phenotype'].value_counts()
-        total_cell_count = total_cell_count[k.columns].values # keep only cell types that are present in the column of k
-        # total_cell_count = total_cell_count.reindex(k.columns).values # replaced by above
-        k_max = k.div(total_cell_count, axis = 0)
-        k_max = k_max.div(k_max.max(axis=1), axis=0).stack()
-        
+        if normalization == "total":
+            # Normalize based on total cell count
+            k = n.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack().fillna(0)
+            # add neighbour phenotype that are not present to make k a square matrix
+            columns_to_add = dict.fromkeys(np.setdiff1d(k.index,k.columns), 0)
+            k = k.assign(**columns_to_add)
+
+            total_cell_count = data['phenotype'].value_counts()
+            total_cell_count = total_cell_count[k.columns].values # keep only cell types that are present in the column of k
+            # total_cell_count = total_cell_count.reindex(k.columns).values # replaced by above
+            k_max = k.div(total_cell_count, axis = 0)
+            k_max = k_max.div(k_max.max(axis=1), axis=0).stack()
+
         # DataFrame with the neighbour frequency and P values
         count = (k_max.values * direction).values # adding directionallity to interaction
         neighbours = pd.DataFrame({'count': count,'p_val': p_values}, index = k_max.index)
