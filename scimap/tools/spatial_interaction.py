@@ -21,6 +21,7 @@ import numpy as np
 from joblib import Parallel, delayed
 import scipy
 from functools import reduce
+from scipy.spatial import Delaunay
 
 
 # Function
@@ -140,6 +141,7 @@ Example:
                 ind = tree.query(data[['x','y']], k=knn, return_distance= False)
             neighbours = pd.DataFrame(ind.tolist(), index = data.index) # neighbour DF
             neighbours.drop(0, axis=1, inplace=True) # Remove self neighbour
+            print(ind)
             
         # b) Local radius method
         if method == 'radius':
@@ -153,8 +155,75 @@ Example:
                 ind = kdt.query_radius(data[['x','y']], r=radius, return_distance=False)
                 
             for i in range(0, len(ind)): ind[i] = np.delete(ind[i], np.argwhere(ind[i] == i))#remove self
-            neighbours = pd.DataFrame(ind.tolist(), index = data.index) # neighbour DF
-            
+            neighbours = pd.DataFrame(ind.tolist(), index = data.index) # neighborhood DF
+            print(ind)
+
+        # c) Delaunay triangulation method
+        # if method == 'delaunay':
+        #     if verbose:
+        #         print("Performing Delaunay triangulation to identify neighbours for every cell")
+        #     if z_coordinate is not None:
+        #         points = data[['x', 'y', 'z']].values
+        #     else:
+        #         points = data[['x', 'y']].values
+        #
+        #     # Perform Delaunay triangulation
+        #     delaunay = Delaunay(points)
+        #
+        #     # Initialize a dictionary to store neighbours
+        #     neighbours_dict = {i: set() for i in range(len(points))}
+        #
+        #     # Iterate over each simplex (triangle/tetrahedron) to populate the neighbours dictionary
+        #     for simplex in delaunay.simplices:
+        #         for i in range(len(simplex)):
+        #             for j in range(i + 1, len(simplex)):
+        #                 neighbours_dict[simplex[i]].add(simplex[j])
+        #                 neighbours_dict[simplex[j]].add(simplex[i])
+        #
+        #     # Convert the neighbours dictionary to a DataFrame
+        #     neighbours_list = [list(neighbours) for neighbours in neighbours_dict.values()]
+        #     neighbours = pd.DataFrame(neighbours_list, index=data.index)
+        #     print(ind)
+
+        if method == 'delaunay':
+            if verbose:
+                print("Performing Delaunay triangulation to identify neighbours for every cell")
+            if z_coordinate is not None:
+                points = data[['x', 'y', 'z']].values
+            else:
+                points = data[['x', 'y']].values
+
+            # Perform Delaunay triangulation
+            delaunay = Delaunay(points)
+
+            # Initialize a dictionary to store neighbours
+            neighbours_dict = {i: set() for i in range(len(points))}
+
+            # Iterate over each simplex (triangle/tetrahedron) to populate the neighbours dictionary
+            for simplex in delaunay.simplices:
+                for i in range(len(simplex)):
+                    for j in range(i + 1, len(simplex)):
+                        neighbours_dict[simplex[i]].add(simplex[j])
+                        neighbours_dict[simplex[j]].add(simplex[i])
+
+            # Convert the neighbours dictionary to a list of lists
+            neighbours_list = [list(neighbours) for neighbours in neighbours_dict.values()]
+
+            # Ensure each list has the same number of elements by padding with -1 (assuming indices are non-negative)
+            max_neigh_len = max(len(neigh) for neigh in neighbours_list)
+            neighbours_list_padded = [neigh + [-1] * (max_neigh_len - len(neigh)) for neigh in neighbours_list]
+
+            # Convert to numpy array for consistency with KNN method
+            ind = np.array(neighbours_list_padded)
+
+            # Convert to DataFrame for the same output format as the original function
+            neighbours = pd.DataFrame(ind.tolist(), index=data.index)
+
+            # Replace -1 with None
+            neighbours.replace(-1, None, inplace=True)
+            print(ind)
+            print(neighbours)
+
         # Map Phenotypes to Neighbours
         # Loop through (all functionized methods were very slow)
         phenomap = dict(zip(list(range(len(ind))), data['phenotype'])) # Used for mapping
