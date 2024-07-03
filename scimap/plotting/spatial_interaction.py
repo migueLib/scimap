@@ -134,7 +134,7 @@ Example:
         # subset the phenotype
         interaction_map = interaction_map[interaction_map['neighbour_phenotype'].isin(subset_neighbour_phenotype)]
         
-    # Seperate Interaction intensity from P-value
+    # Separate Interaction intensity from P-value
     p_value = interaction_map.filter(regex='pvalue_')    
     p_val_df = pd.concat([interaction_map[['phenotype','neighbour_phenotype']], p_value], axis=1, join='outer')
     p_val_df = p_val_df.set_index(['phenotype','neighbour_phenotype'])
@@ -246,11 +246,13 @@ Example:
         p_val_data = mask.copy()
         map_data.reset_index(inplace=True)
         p_val_data.reset_index(inplace=True)
-        # remove the first two colums
+
+        # Remove the first two columns
         map_data = map_data.drop(['phenotype','neighbour_phenotype'],axis=1)
         p_val_data = p_val_data.drop(['phenotype','neighbour_phenotype'],axis=1)
         p_val_data.columns = map_data.columns
-        # remove the mased values
+
+        # Remove the mased values
         final_Data = map_data.where(~p_val_data, other=np.nan)
         final_Data.index = interaction_map.index
         return final_Data

@@ -294,7 +294,6 @@ Example:
             z_scores[np.isnan(z_scores)] = 0
             p_values = scipy.stats.norm.sf(abs(z_scores))*2
             p_values = p_values[~np.isnan(p_values)]
-            print(z_scores.values)
 
         # Compute Direction of interaction (interaction or avoidance)
         direction = ((n_freq.values - mean) / abs(n_freq.values - mean)).fillna(1)
@@ -322,15 +321,21 @@ Example:
             k_max = k_max.div(k_max.max(axis=1), axis=0).stack()
 
         # DataFrame with the neighbour frequency and P values
-        count = (k_max.values * direction).values # adding directionallity to interaction
-        neighbours = pd.DataFrame({'count': count,'p_val': p_values, 'z_score':z_scores.values}, index = k_max.index)
-        #neighbours.loc[neighbours[neighbours['p_val'] > p_val].index,'count'] = np.NaN
-        #del neighbours['p_val']
-        neighbours.columns = [adata_subset.obs[imageid].unique()[0], 'pvalue_' + str(adata_subset.obs[imageid].unique()[0]), 'zscore_' + str(adata_subset.obs[imageid].unique()[0])]
-        neighbours = neighbours.reset_index()
-        #neighbours = neighbours['count'].unstack()
+        if pval_method == 'abs':
+            count = (k_max.values * direction).values # adding directionallity to interaction
+            neighbours = pd.DataFrame({'count': count, 'p_val': p_values}, index=k_max.index)
+            neighbours.columns = [adata_subset.obs[imageid].unique()[0],
+                                  'pvalue_' + str(adata_subset.obs[imageid].unique()[0])]
+            neighbours = neighbours.reset_index()
+
+        elif pval_method == 'zscore':
+            count = (k_max.values * direction).values # adding directionality to interaction
+            neighbours = pd.DataFrame({'z_score':z_scores.values,'p_val': p_values}, index = k_max.index)
+            neighbours.columns = ['zscore_' + str(adata_subset.obs[imageid].unique()[0]),
+                                  'pvalue_' + str(adata_subset.obs[imageid].unique()[0])]
+            neighbours = neighbours.reset_index()
         
-        # return
+        # Return the results
         return neighbours
           
       
