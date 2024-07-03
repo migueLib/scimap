@@ -37,6 +37,7 @@ def spatial_interaction (adata,
                          imageid='imageid',
                          subset=None,
                          pval_method='zscore',
+                         normalization='total',
                          verbose=True,
                          label='spatial_interaction'):
     """
@@ -57,7 +58,7 @@ Parameters:
             Column name in `adata` indicating cell phenotype or any categorical cell classification.
 
         method (str, optional):  
-            Method to define neighborhoods: 'radius' for fixed distance, 'knn' for K nearest neighbors.
+            Method to define neighborhoods: 'radius' for fixed distance, 'knn' for K nearest neighbors and 'delaunay' for Delaunay triangulation.
 
         radius (int, optional):  
             Radius for neighborhood definition (applies when method='radius').
@@ -76,6 +77,9 @@ Parameters:
 
         pval_method (str, optional):  
             Method for p-value calculation: 'abs' for absolute difference, 'zscore' for z-score based significance.
+
+        normalization (str, optional):
+            Method for normalization: 'total' for total cell count normalization, 'conditional' for conditional normalization (adapted from histocat).
         
         verbose (bool):  
             If set to `True`, the function will print detailed messages about its progress and the steps being executed.
@@ -109,13 +113,19 @@ Example:
     """
     
     
-    def spatial_interaction_internal (adata_subset,x_coordinate,y_coordinate,
+    def spatial_interaction_internal (adata_subset,
+                                      x_coordinate,
+                                      y_coordinate,
                                       z_coordinate,
                                       phenotype,
-                                      method, radius, knn,
+                                      method,
+                                      radius,
+                                      knn,
                                       permutation, 
-                                      imageid,subset,
-                                      pval_method):
+                                      imageid,
+                                      subset,
+                                      pval_method,
+                                      normalization):
         if verbose:
             print("Processing Image: " + str(adata_subset.obs[imageid].unique()))
         
@@ -216,7 +226,6 @@ Example:
         if verbose:
             print('Performing '+ str(permutation) + ' permutations')
 
-        normalization = "conditional" # normalization method
         def permutation_pval (data):
             data = data.assign(neighbour_phenotype=np.random.permutation(data['neighbour_phenotype']))
             #data['neighbour_phenotype'] = np.random.permutation(data['neighbour_phenotype'])
@@ -278,6 +287,8 @@ Example:
             # real value - prem value / no of perm 
             p_values = abs(n_freq.values - mean) / (permutation+1)
             p_values = p_values[~np.isnan(p_values)].values
+
+
         if pval_method == 'zscore':
             z_scores = (n_freq.values - mean) / std        
             z_scores[np.isnan(z_scores)] = 0
@@ -312,10 +323,10 @@ Example:
 
         # DataFrame with the neighbour frequency and P values
         count = (k_max.values * direction).values # adding directionallity to interaction
-        neighbours = pd.DataFrame({'count': count,'p_val': p_values}, index = k_max.index)
+        neighbours = pd.DataFrame({'count': count,'p_val': p_values, 'z_score':z_scores.values}, index = k_max.index)
         #neighbours.loc[neighbours[neighbours['p_val'] > p_val].index,'count'] = np.NaN
         #del neighbours['p_val']
-        neighbours.columns = [adata_subset.obs[imageid].unique()[0], 'pvalue_' + str(adata_subset.obs[imageid].unique()[0])]
+        neighbours.columns = [adata_subset.obs[imageid].unique()[0], 'pvalue_' + str(adata_subset.obs[imageid].unique()[0]), 'zscore_' + str(adata_subset.obs[imageid].unique()[0])]
         neighbours = neighbours.reset_index()
         #neighbours = neighbours['count'].unstack()
         
@@ -332,14 +343,25 @@ Example:
     
     # Apply function to all images and create a master dataframe
     # Create lamda function 
-    r_spatial_interaction_internal = lambda x: spatial_interaction_internal (adata_subset=x, x_coordinate=x_coordinate, y_coordinate=y_coordinate, 
-                                                                             z_coordinate=z_coordinate, phenotype=phenotype, method=method,  radius=radius, knn=knn, permutation=permutation, imageid=imageid,subset=subset,pval_method=pval_method) 
-    all_data = list(map(r_spatial_interaction_internal, adata_list)) # Apply function 
-    
+    r_spatial_interaction_internal = lambda x: spatial_interaction_internal (adata_subset=x,
+                                                                             x_coordinate=x_coordinate,
+                                                                             y_coordinate=y_coordinate,
+                                                                             z_coordinate=z_coordinate,
+                                                                             phenotype=phenotype,
+                                                                             method=method,
+                                                                             radius=radius,
+                                                                             knn=knn,
+                                                                             permutation=permutation,
+                                                                             imageid=imageid,
+                                                                             subset=subset,
+                                                                             pval_method=pval_method,
+                                                                             normalization=normalization)
+
+    # Apply function to all images
+    all_data = list(map(r_spatial_interaction_internal, adata_list)) # Apply function
 
     # Merge all the results into a single dataframe    
     df_merged = reduce(lambda  left,right: pd.merge(left,right,on=['phenotype', 'neighbour_phenotype'], how='outer'), all_data)
-    
 
     # Add to anndata
     adata.uns[label] = df_merged
