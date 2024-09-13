@@ -129,7 +129,8 @@ Example:
         if verbose:
             print("Processing Image: " + str(adata_subset.obs[imageid].unique()))
         
-        # Create a dataFrame with the necessary inforamtion
+        # Create a dataFrame with the necessary information
+        # This is useful for 3D data or 2D data with Z coordinate (multi stacks)
         if z_coordinate is not None:
             if verbose:
                 print("Including Z -axis")
@@ -138,7 +139,7 @@ Example:
             data = pd.DataFrame({'x': adata_subset.obs[x_coordinate], 'y': adata_subset.obs[y_coordinate], 'phenotype': adata_subset.obs[phenotype]})
 
         
-        # Identify neighbourhoods based on the method used
+        # Select the neighborhood method, knn, radius or delaunay
         # a) KNN method
         if method == 'knn':
             if verbose:
@@ -204,6 +205,7 @@ Example:
             # Replace -1 with None
             neighbours.replace(-1, None, inplace=True)
 
+        ### END OF NEIGHBORHOOD SELECTION ###
         # Map Phenotypes to Neighbours
         # Loop through (all functionized methods were very slow)
         phenomap = dict(zip(list(range(len(ind))), data['phenotype'])) # Used for mapping
@@ -226,9 +228,9 @@ Example:
         if verbose:
             print('Performing '+ str(permutation) + ' permutations')
 
+        #### Permutation ####
         def permutation_pval (data):
             data = data.assign(neighbour_phenotype=np.random.permutation(data['neighbour_phenotype']))
-            #data['neighbour_phenotype'] = np.random.permutation(data['neighbour_phenotype'])
             data_freq = data.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack()
             data_freq = data_freq.fillna(0).stack().values
             return data_freq
@@ -242,29 +244,31 @@ Example:
             data = data.drop_duplicates()
             data = data.set_index('index')
 
+            # We noralize the data based on the number of cells of each type with at least one neighbor of another type
             normalization_factor = data.groupby(['phenotype', 'neighbour_phenotype']).size().unstack()
             data_freq = data_freq/normalization_factor
             data_freq = data_freq.fillna(0).stack().values
 
             return data_freq
 
-        # Apply function
+        # Apply permutation functions depending on normalization
         if normalization == "total":
             final_scores = Parallel(n_jobs=-1)(delayed(permutation_pval)(data=n) for i in range(permutation))
         if normalization == "conditional":
             final_scores = Parallel(n_jobs=-1)(delayed(permutation_pval_norm)(data=n) for i in range(permutation))
 
+        # Permutation results
         perm = pd.DataFrame(final_scores).T
         
         # Consolidate the permutation results
         if verbose:
             print('Consolidating the permutation results')
+
         # Calculate P value
-        # real
+        # N_freq is the observed frequency of each cell type with each of its neighbours (observed number of interactions)
         n_freq = n.groupby(['phenotype','neighbour_phenotype'],observed=False).size().unstack().fillna(0).stack()
 
         # Normalize n_freq if normalization is conditional
-
         if normalization == "conditional":
             data = n.assign(neighbour_phenotype=np.random.permutation(n['neighbour_phenotype']))
             data_freq = n.groupby(['phenotype', 'neighbour_phenotype'], observed=False).size().unstack()
@@ -284,10 +288,9 @@ Example:
 
         # P-value calculation
         if pval_method == 'abs':
-            # real value - prem value / no of perm 
-            p_values = abs(n_freq.values - mean) / (permutation+1)
+            # Calculate the number of times permuted values exceed the observed
+            p_values = np.sum(perm >= n_freq.values[:, None], axis=1) / (permutation + 1)
             p_values = p_values[~np.isnan(p_values)].values
-
 
         if pval_method == 'zscore':
             z_scores = (n_freq.values - mean) / std        
